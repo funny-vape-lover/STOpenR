@@ -1046,85 +1046,70 @@ async function processProviderError(provider, errorMessage, errorTitle) {
     // Check if switching is enabled AND a key was actually found
     if (failedKey && keySwitchingEnabled[provider.secret_key]) {
 
-    // --- START: Multi-Stage Error Detection Logic ---
+// --- START: Multi-Stage Error Detection Logic ---
     let statusCode = null;
     let detectedReason = "Unknown error"; // Default reason
 
-    // 1. Try parsing status code from errorMessage OR errorTitle
-    const messageMatch = errorMessage?.match(/\b(\d{3})\b/);
-    const titleMatch = errorTitle?.match(/\b(\d{3})\b/);
+    // Create combined text immediately for checking
+    const combinedErrorText = `${errorMessage || ''} ${errorTitle || ''}`;
 
-    if (messageMatch) {
-        statusCode = parseInt(messageMatch[1], 10);
-        detectedReason = `Status code ${statusCode} in message`;
-        console.log(`KeySwitcher: Found status code ${statusCode} in error message for ${provider.name}.`);
-    } else if (titleMatch) {
-        statusCode = parseInt(titleMatch[1], 10);
-        detectedReason = `Status code ${statusCode} in title`;
-        console.log(`KeySwitcher: Found status code ${statusCode} in error title for ${provider.name}.`);
+    // 1. PRIORITY CHECK: fatal keywords (Override any numeric code found later)
+    // 499 = Suspended/Blocked/Expired
+    if (/(suspended|expired|leaked|blocked|compromised|disabled|restricted|banned)/i.test(combinedErrorText)) {
+         statusCode = 499;
+         detectedReason = `Critical Keyword Match: Suspended/Blocked/Leaked`;
+         console.log(`KeySwitcher: Critical keyword detected. Forcing status 499.`);
     }
 
-    // 2. If still no numeric code, check for common text patterns
-    if (statusCode === null) {
-         console.log(`KeySwitcher: No numeric status code found for ${provider.name}. Checking text patterns...`);
-         const combinedErrorText = `${errorMessage || ''} ${errorTitle || ''}`; // Combine safely
+    // 2. If not a critical keyword, try parsing numeric status code
+    else {
+        const messageMatch = errorMessage?.match(/\b(\d{3})\b/);
+        const titleMatch = errorTitle?.match(/\b(\d{3})\b/);
 
-        // --- NEW: Check for Suspended/Blocked/Expired keywords -> Map to 499 ---
-         if (/(suspended|expired|leaked|blocked|invalid|disabled|restricted|banned)/i.test(combinedErrorText)) {
-             statusCode = 499;
-             detectedReason = `Text match for Suspended/Blocked/Leaked mapped to 499`;
-         }
-         // --------------------------------------------------------------------------
+        if (messageMatch) {
+            statusCode = parseInt(messageMatch[1], 10);
+            detectedReason = `Status code ${statusCode} in message`;
+        } else if (titleMatch) {
+            statusCode = parseInt(titleMatch[1], 10);
+            detectedReason = `Status code ${statusCode} in title`;
+        }
 
-
-         // Add more specific checks based on provider if possible
-         if (provider.secret_key === SECRET_KEYS.MAKERSUITE) { // Gemini specific checks first
-             if (/quota|rate limit/i.test(combinedErrorText)) { statusCode = 429; detectedReason = `Gemini text match for Quota/Rate Limit mapped to 429`; }
-             else if (/API key not valid|PERMISSION_DENIED/i.test(combinedErrorText)) { statusCode = 403; detectedReason = `Gemini text match for API Key/Permission mapped to 403`; }
-             // Add more Gemini specific text -> code mappings?
-         }
-         // Claude specific checks
-         else if (provider.secret_key === SECRET_KEYS.CLAUDE) {
-             // For Claude, Internal Server Error with 500 is often due to authentication issues
-             if (/Internal Server Error/i.test(combinedErrorText)) { 
-                 statusCode = 401; // Treat as authentication error
-                 detectedReason = `Claude specific: Internal Server Error mapped to 401`; 
+        // 3. Fallback: Check for text patterns if no number found (or if matches known "Not Found" texts)
+        if (statusCode === null) {
+             // Gemini Specific
+             if (provider.secret_key === SECRET_KEYS.MAKERSUITE) {
+                 if (/quota|rate limit/i.test(combinedErrorText)) { statusCode = 429; detectedReason = `Gemini Quota/Rate Limit`; }
+                 // Matches "API Key not found", "API key not valid", "Permission Denied"
+                 else if (/(API\s?Key\s?not\s?found|API\s?key\s?not\s?valid|PERMISSION_DENIED|pass\s?a\s?valid\s?API\s?key)/i.test(combinedErrorText)) { statusCode = 401; detectedReason = `Gemini API Key Invalid`; }
              }
-         }
-         // General checks (if not already matched by specific provider)
-         else if (/(Unauthorized|Invalid[\s_\-]?API[\s_\-]?Key|Authentication[\s_\-]?Error|Invalid[\s_\-]?Authentication|invalid[\s_\-]?x[\s_\-]?api[\s_\-]?key|authentication[\s_\-]?error|Check.*connection.*API key|Check.*API key.*connection)/i.test(combinedErrorText)) { statusCode = 401; detectedReason = `Text match for Auth Error mapped to 401`; }
-         else if (/Rate Limit Exceeded|Too Many Requests|Rate limit reached/i.test(combinedErrorText)) { statusCode = 429; detectedReason = `Text match for Rate Limit mapped to 429`; }
-         else if (/Payment Required|Billing issue|budget|credit|insufficient quota/i.test(combinedErrorText)) { statusCode = 402; detectedReason = `Text match for Payment/Billing mapped to 402`; } // Added insufficient quota
-         else if (/Forbidden|Permission Denied|Permission Error/i.test(combinedErrorText)) { statusCode = 403; detectedReason = `Text match for Forbidden/Permission mapped to 403`; }
-         // Add more general mappings?
+             // Claude Specific
+             else if (provider.secret_key === SECRET_KEYS.CLAUDE) {
+                 if (/Internal Server Error/i.test(combinedErrorText)) { statusCode = 401; detectedReason = `Claude Internal Server Error`; }
+             }
 
-         if (statusCode !== null) {
-             console.log(`KeySwitcher: Mapped error text to status code ${statusCode} for ${provider.name}.`);
-         } else {
-             // Try parsing JSON error for authentication errors
-             let foundAuthError = false;
-             try {
-                 const jsonMatch = errorMessage?.match(/({.*})/);
-                 if (jsonMatch?.[1]) {
-                     const parsed = JSON.parse(jsonMatch[1]);
-                     const msg = parsed?.error?.message || '';
-                     const typ = parsed?.error?.type || '';
-                     if (/invalid x-api-key|authentication_error|unauthorized/i.test(msg) || /invalid x-api-key|authentication_error|unauthorized/i.test(typ)) {
-                         statusCode = 401;
-                         detectedReason = `JSON error match for Auth Error mapped to 401`;
-                         foundAuthError = true;
-                         console.log(`KeySwitcher: Found authentication error in JSON for ${provider.name}. Treating as 401.`);
+             // General Mappings
+             if (statusCode === null) {
+                 if (/(Unauthorized|Invalid[\s_\-]?API[\s_\-]?Key|Authentication[\s_\-]?Error|API\s?Key\s?not\s?found|pass\s?a\s?valid\s?API\s?key)/i.test(combinedErrorText)) { statusCode = 401; detectedReason = `Auth Error text match`; }
+                 else if (/Rate Limit|Too Many Requests|Quota|Resource Exhausted/i.test(combinedErrorText)) { statusCode = 429; detectedReason = `Rate Limit text match`; }
+                 else if (/Payment Required|Billing|budget|credit|insufficient quota/i.test(combinedErrorText)) { statusCode = 402; detectedReason = `Billing text match`; }
+                 else if (/Forbidden|Permission Denied|Permission Error/i.test(combinedErrorText)) { statusCode = 403; detectedReason = `Permission text match`; }
+             }
+
+             // 4. JSON Fallback
+             if (statusCode === null) {
+                 try {
+                     const jsonMatch = errorMessage?.match(/({.*})/);
+                     if (jsonMatch?.[1]) {
+                         const parsed = JSON.parse(jsonMatch[1]);
+                         const msg = (parsed?.error?.message || '').toLowerCase();
+                         if (msg.includes('api key') || msg.includes('not found') || msg.includes('unauthorized')) statusCode = 401;
+                         else if (msg.includes('quota')) statusCode = 429;
                      }
-                 }
-             } catch (jsonErr) {
-                 // Ignore JSON parse errors
+                 } catch (jsonErr) {}
              }
-             if (!foundAuthError) {
-                 console.log(`KeySwitcher: No numeric code or recognizable error text pattern found for ${provider.name}.`);
-                 detectedReason = (errorMessage || 'Unknown Error').split('\n')[0].slice(0, 100); // Fallback reason
-             }
-         }
+        }
     }
+
 
     // --- Now, proceed with action based on the determined statusCode (if valid) ---
     if (statusCode !== null) {
@@ -1353,5 +1338,6 @@ jQuery(async () => {
 
 // Export the plugin's init function - CORRECTED
 export default init;
+
 
 
