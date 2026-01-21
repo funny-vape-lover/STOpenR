@@ -110,6 +110,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             404: "Not Found: The requested resource was not found.",
             413: "Request Too Large: Request exceeds the maximum size.",
             429: "Rate Limit Error: Your account has hit a rate limit.",
+            499: "Key Blocked/Suspended: Key is expired, leaked, suspended, or blocked.",
             500: "API Error: An unexpected internal error occurred."
         }
     },
@@ -119,6 +120,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             401: "Authentication Error: Invalid API key or organization.",
             403: "Permission Denied: Country, region, or territory not supported, or other permission issue.",
             429: "Rate Limit/Quota Exceeded: Too many requests or ran out of credits.",
+            499: "Key Blocked/Suspended: Key is expired, leaked, suspended, or blocked.",
             500: "Server Error: Issue on OpenAI's servers.",
             503: "Service Unavailable: Engine overloaded or high traffic."
         }
@@ -130,6 +132,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             403: "Permission Denied: API key lacks permissions or issue with tuned model auth.",
             404: "Not Found: Requested resource (e.g., file) wasn't found.",
             429: "Resource Exhausted: Rate limit exceeded.",
+            499: "Key Blocked/Suspended: Key is expired, leaked, suspended, or blocked.",
             500: "Internal Error: Unexpected error on Google's side (e.g., context too long).",
             503: "Service Unavailable: Service temporarily overloaded or down.",
             504: "Deadline Exceeded: Request took too long (e.g., context too large)."
@@ -140,6 +143,7 @@ const PROVIDER_ERROR_MAPPINGS = {
         codes: {
             401: "Unauthorized: Check your API key and authentication headers.",
             429: "Too Many Requests: Reduce request rate or upgrade plan.",
+            499: "Key Blocked/Suspended: Key is expired, leaked, suspended, or blocked.",
             500: "Server Error: Retry the request after a short delay.",
             503: "Service Unavailable: Check status page."
         }
@@ -154,7 +158,8 @@ const PROVIDER_ERROR_MAPPINGS = {
             405: "Method Not Allowed: Incorrect HTTP method used.",
             415: "Unsupported Media Type: Empty request body or missing Content-Type header.",
             422: "Unprocessable Entity: Invalid format for a field in the request body.",
-            429: "Too Many Requests: Rate limit reached."
+            429: "Too Many Requests: Rate limit reached.",
+            499: "Key Blocked/Suspended: Key is expired, leaked, suspended, or blocked."
         }
     },
      // Add mappings for OpenRouter if needed, might have generic or passthrough codes
@@ -165,6 +170,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             401: "Authentication Error: Invalid OpenRouter API key.",
             402: "Payment Required: Account requires funds or payment method.", // Common for OpenRouter
             429: "Rate Limit/Quota Exceeded: Too many requests or insufficient credits/budget.",
+            499: "Key Blocked/Suspended: Key is expired, leaked, suspended, or blocked.",
             // Add other known common OpenRouter or passthrough codes here
         }
     }
@@ -1063,6 +1069,14 @@ async function processProviderError(provider, errorMessage, errorTitle) {
          console.log(`KeySwitcher: No numeric status code found for ${provider.name}. Checking text patterns...`);
          const combinedErrorText = `${errorMessage || ''} ${errorTitle || ''}`; // Combine safely
 
+        // --- NEW: Check for Suspended/Blocked/Expired keywords -> Map to 499 ---
+         if (/(suspended|expired|leaked|blocked|compromised|disabled|restricted|banned)/i.test(combinedErrorText)) {
+             statusCode = 499;
+             detectedReason = `Text match for Suspended/Blocked/Leaked mapped to 499`;
+         }
+         // --------------------------------------------------------------------------
+
+
          // Add more specific checks based on provider if possible
          if (provider.secret_key === SECRET_KEYS.MAKERSUITE) { // Gemini specific checks first
              if (/quota|rate limit/i.test(combinedErrorText)) { statusCode = 429; detectedReason = `Gemini text match for Quota/Rate Limit mapped to 429`; }
@@ -1339,3 +1353,4 @@ jQuery(async () => {
 
 // Export the plugin's init function - CORRECTED
 export default init;
+
