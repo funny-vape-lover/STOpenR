@@ -1070,7 +1070,7 @@ async function processProviderError(provider, errorMessage, errorTitle) {
          const combinedErrorText = `${errorMessage || ''} ${errorTitle || ''}`; // Combine safely
 
         // --- NEW: Check for Suspended/Blocked/Expired keywords -> Map to 499 ---
-         if (/(suspended|expired|leaked|blocked|compromised|disabled|restricted|banned)/i.test(combinedErrorText)) {
+         if (/(suspended|expired|leaked|blocked|invalid|disabled|restricted|banned)/i.test(combinedErrorText)) {
              statusCode = 499;
              detectedReason = `Text match for Suspended/Blocked/Leaked mapped to 499`;
          }
@@ -1353,4 +1353,5 @@ jQuery(async () => {
 
 // Export the plugin's init function - CORRECTED
 export default init;
+
 
